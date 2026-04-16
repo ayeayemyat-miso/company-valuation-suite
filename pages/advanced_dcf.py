@@ -4,19 +4,10 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 from datetime import datetime
-import base64
-from io import BytesIO
-import zipfile
+import json
+import os
 
-# ============================================================================
-# PAGE CONFIGURATION
-# ============================================================================
-st.set_page_config(
-    page_title="DCF Valuation Dashboard",
-    page_icon="📊",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+st.set_page_config(page_title="DCF Valuation Dashboard", layout="wide")
 
 # ============================================================================
 # HELPER FUNCTIONS
@@ -36,123 +27,8 @@ def calculate_cost_of_debt_from_financials(interest_expense, total_debt_start, t
     else:
         return 0, 0, 0
 
-def download_excel_report(ebit_all, nopat_all, dep_all, wc_all, capex_all, fcf_all, 
-                          user_years, fcf_projected, discount_formulas, pv_fcfs,
-                          npv_fcfs, pv_terminal, enterprise_value, equity_value,
-                          value_per_share, wacc, perpetuity_growth, total_debt_adj,
-                          total_cash, short_term_inv, diluted_shares, sensitivity_df,
-                          tax_rates):
-    """Generate and return Excel file for download"""
-    
-    export_data = {
-        'Valuation_Results': pd.DataFrame({
-            'Metric': ['NPV of UFCF', 'PV of Terminal Value', 'Enterprise Value', 
-                      'Equity Value', 'Value Per Share', 'WACC', 'Perpetuity Growth',
-                      'Total Debt', 'Cash & Equivalents', 'Short Term Investments', 'Diluted Shares'],
-            'Value': [f'${npv_fcfs:,.0f}M', f'${pv_terminal:,.0f}M', 
-                     f'${enterprise_value:,.0f}M', f'${equity_value:,.0f}M', 
-                     f'${value_per_share:.2f}', f'{wacc:.2%}', f'{perpetuity_growth:.2%}',
-                     f'${total_debt_adj:,.0f}M', f'${total_cash:,.0f}M',
-                     f'${short_term_inv:,.0f}M', f'{diluted_shares:,.0f}M']
-        }),
-        'FCF_Projections': pd.DataFrame({
-            'Year': user_years,
-            'Tax_Rate': [f'{x:.1%}' for x in tax_rates],
-            'EBIT_M': [f'{x:,.0f}' for x in ebit_all],
-            'NOPAT_M': [f'{x:,.0f}' for x in nopat_all],
-            'Depreciation_M': [f'{x:,.0f}' for x in dep_all],
-            'Delta_WC_M': [f'{x:,.0f}' for x in wc_all],
-            'CapEx_M': [f'{x:,.0f}' for x in capex_all],
-            'Unlevered_FCF_M': [f'{x:,.0f}' for x in fcf_all]
-        }),
-        'Discount_Factors': pd.DataFrame({
-            'Year': user_years[2:7],
-            'FCF_M': [f'{x:,.0f}' for x in fcf_projected],
-            'Discount_Factor': discount_formulas,
-            'PV_of_FCF_M': [f'{x:,.0f}' for x in pv_fcfs]
-        })
-    }
-    
-    if sensitivity_df is not None and not sensitivity_df.empty:
-        export_data['Sensitivity_Analysis'] = sensitivity_df
-    
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        for sheet_name, df in export_data.items():
-            df.to_excel(writer, sheet_name=sheet_name, index=False)
-    
-    output.seek(0)
-    return output
-
-def download_csv_report(ebit_all, nopat_all, dep_all, wc_all, capex_all, fcf_all, 
-                        user_years, fcf_projected, discount_formulas, pv_fcfs,
-                        npv_fcfs, pv_terminal, enterprise_value, equity_value,
-                        value_per_share, wacc, perpetuity_growth, total_debt_adj,
-                        total_cash, short_term_inv, diluted_shares, sensitivity_df,
-                        tax_rates):
-    """Generate and return CSV files for download"""
-    
-    # Create summary data
-    summary_data = {
-        'Metric': ['NPV of UFCF', 'PV of Terminal Value', 'Enterprise Value', 
-                  'Equity Value', 'Value Per Share', 'WACC', 'Perpetuity Growth',
-                  'Total Debt', 'Cash & Equivalents', 'Short Term Investments', 'Diluted Shares'],
-        'Value': [f'{npv_fcfs:,.0f}', f'{pv_terminal:,.0f}', 
-                 f'{enterprise_value:,.0f}', f'{equity_value:,.0f}', 
-                 f'{value_per_share:.2f}', f'{wacc:.4f}', f'{perpetuity_growth:.4f}',
-                 f'{total_debt_adj:,.0f}', f'{total_cash:,.0f}',
-                 f'{short_term_inv:,.0f}', f'{diluted_shares:,.0f}']
-    }
-    
-    # Create FCF data
-    fcf_data = {
-        'Year': user_years,
-        'Tax_Rate': [f'{x:.1%}' for x in tax_rates],
-        'EBIT_M': [f'{x:,.0f}' for x in ebit_all],
-        'NOPAT_M': [f'{x:,.0f}' for x in nopat_all],
-        'Depreciation_M': [f'{x:,.0f}' for x in dep_all],
-        'Delta_WC_M': [f'{x:,.0f}' for x in wc_all],
-        'CapEx_M': [f'{x:,.0f}' for x in capex_all],
-        'Unlevered_FCF_M': [f'{x:,.0f}' for x in fcf_all]
-    }
-    
-    # Create discount data
-    discount_data = {
-        'Year': user_years[2:7],
-        'FCF_M': [f'{x:,.0f}' for x in fcf_projected],
-        'Discount_Factor': discount_formulas,
-        'PV_of_FCF_M': [f'{x:,.0f}' for x in pv_fcfs]
-    }
-    
-    # Create zip file with multiple CSVs
-    zip_buffer = BytesIO()
-    
-    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-        # Add summary CSV
-        summary_df = pd.DataFrame(summary_data)
-        summary_csv = summary_df.to_csv(index=False)
-        zip_file.writestr('valuation_summary.csv', summary_csv)
-        
-        # Add FCF CSV
-        fcf_df = pd.DataFrame(fcf_data)
-        fcf_csv = fcf_df.to_csv(index=False)
-        zip_file.writestr('fcf_projections.csv', fcf_csv)
-        
-        # Add discount CSV
-        discount_df = pd.DataFrame(discount_data)
-        discount_csv = discount_df.to_csv(index=False)
-        zip_file.writestr('discount_factors.csv', discount_csv)
-        
-        # Add sensitivity CSV if available
-        if sensitivity_df is not None and not sensitivity_df.empty:
-            sensitivity_csv = sensitivity_df.to_csv()
-            zip_file.writestr('sensitivity_analysis.csv', sensitivity_csv)
-    
-    zip_buffer.seek(0)
-    return zip_buffer
-
 # ============================================================================
-# CUSTOM CSS - MODERN UI WITH LIGHT GREEN BACKGROUND
+# CUSTOM CSS - MODERN UI WITH LIGHT GREEN BACKGROUND (ORIGINAL - UNCHANGED)
 # ============================================================================
 st.markdown("""
 <style>
@@ -425,10 +301,6 @@ td, th {
 # ============================================================================
 # SESSION STATE
 # ============================================================================
-if 'scenarios' not in st.session_state:
-    st.session_state.scenarios = {}
-if 'current_scenario' not in st.session_state:
-    st.session_state.current_scenario = "Base Case"
 if 'show_detail_npv' not in st.session_state:
     st.session_state.show_detail_npv = False
 if 'show_detail_tv' not in st.session_state:
@@ -449,30 +321,12 @@ with st.sidebar:
     st.markdown("## 📊 DCF Pro")
     st.markdown("---")
     
-    # Scenario Management
-    st.markdown("### 📁 Scenarios")
-    new_scenario_name = st.text_input("Scenario Name", st.session_state.current_scenario)
-    
-    col_s1, col_s2 = st.columns(2)
-    with col_s1:
-        if st.button("💾 Save", use_container_width=True):
-            st.success(f"Saved '{new_scenario_name}'")
-    with col_s2:
-        if st.button("📂 Load", use_container_width=True):
-            st.info("Select from saved scenarios")
-    
-    if st.session_state.scenarios:
-        st.markdown("**Saved:**")
-        for name in st.session_state.scenarios.keys():
-            if st.button(f"📁 {name}", key=f"sidebar_load_{name}", use_container_width=True):
-                st.session_state.current_scenario = name
-                st.rerun()
-    
-    st.markdown("---")
-    st.markdown("### 📥 Export")
-    
-    # Export options (PDF removed)
-    export_format = st.radio("Export Format:", ["📊 Excel", "📁 CSV (Multiple Files)"], horizontal=False)
+    st.markdown("### 📌 Quick Tips")
+    st.markdown("""
+    - Adjust inputs in each tab
+    - Results update automatically
+    - Use the User Guide for help
+    """)
     
     st.markdown("---")
     st.caption("Built with ❤️ using Streamlit")
@@ -1040,7 +894,7 @@ with tab3:
     
     st.markdown("---")
     
-    # Sensitivity Analysis
+    # Sensitivity Analysis (FIXED - No matplotlib)
     st.markdown('<div class="section-header">🎯 Sensitivity Analysis</div>', unsafe_allow_html=True)
     
     sensitivity_df = None
@@ -1074,10 +928,11 @@ with tab3:
             st.markdown('<div style="writing-mode: vertical-rl; transform: rotate(180deg); text-align: center; font-weight: bold; min-height: 300px; color: #1e293b;">↓ Growth Rate</div>', unsafe_allow_html=True)
         with col_right_sens:
             st.markdown('<div style="text-align: center; font-weight: bold; margin-bottom: 5px; color: #1e293b;">WACC (Discount Rate) →</div>', unsafe_allow_html=True)
-            st.dataframe(sensitivity_df.style.format("{:.2f}").background_gradient(cmap="RdYlGn", axis=None), width='stretch')
+            # Display as plain dataframe without gradient (no matplotlib dependency)
+            st.dataframe(sensitivity_df.style.format("{:.2f}"), width='stretch')
         
         st.caption("💡 **How to read:** Find Value Per Share at intersection of WACC (rows) and Growth Rate (columns)")
-        st.caption("🟢 Green = Higher Value | 🔴 Red = Lower Value")
+        st.caption("📊 Higher values (top-right) = higher valuation | Lower values (bottom-left) = lower valuation")
     else:
         st.warning("Adjust WACC and Growth Rate to enable sensitivity analysis (WACC must be > Growth Rate)")
 
@@ -1135,62 +990,16 @@ with tab4:
         st.plotly_chart(fig3, use_container_width=True)
     
     st.markdown("---")
-    
-    # Export Section with working download buttons (PDF removed)
-    st.markdown('<div class="section-header">📥 Export Results</div>', unsafe_allow_html=True)
-    
-    if export_format == "📊 Excel":
-        if st.button("📊 Generate Excel Report", use_container_width=True, key="excel_generate_btn"):
-            with st.spinner("Generating Excel report..."):
-                excel_file = download_excel_report(
-                    ebit_all, nopat_all, dep_all, wc_all, capex_all, fcf_all,
-                    user_years, fcf_projected, discount_formulas, pv_fcfs,
-                    npv_fcfs, pv_terminal, enterprise_value, equity_value,
-                    value_per_share, wacc, perpetuity_growth, total_debt_adj,
-                    total_cash, short_term_inv, diluted_shares, sensitivity_df,
-                    tax_rates
-                )
-                
-                st.download_button(
-                    label="📥 Click to Download Excel File",
-                    data=excel_file,
-                    file_name=f"dcf_valuation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
-                )
-                st.success("✅ Excel report ready for download!")
-    
-    else:  # CSV Export
-        if st.button("📁 Generate CSV Package", use_container_width=True, key="csv_generate_btn"):
-            with st.spinner("Generating CSV files..."):
-                csv_zip = download_csv_report(
-                    ebit_all, nopat_all, dep_all, wc_all, capex_all, fcf_all,
-                    user_years, fcf_projected, discount_formulas, pv_fcfs,
-                    npv_fcfs, pv_terminal, enterprise_value, equity_value,
-                    value_per_share, wacc, perpetuity_growth, total_debt_adj,
-                    total_cash, short_term_inv, diluted_shares, sensitivity_df,
-                    tax_rates
-                )
-                
-                st.download_button(
-                    label="📥 Click to Download CSV Package (ZIP)",
-                    data=csv_zip,
-                    file_name=f"dcf_valuation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
-                    mime="application/zip",
-                    use_container_width=True
-                )
-                st.success("✅ CSV package ready for download!")
-    
-    st.markdown("---")
-    st.info("💡 **Tip:** Use the export buttons above to download your valuation results in Excel or CSV format!")
+    st.info("💡 **Tip:** Adjust inputs in the Input Parameters tab to see how they affect valuations!")
 
+# ============================================================================
 # ============================================================================
 # FOOTER
 # ============================================================================
 st.markdown("---")
 st.markdown(f"""
 <div style="text-align: center; color: #1b5e20; padding: 20px;">
-    <p>🎯 <b>Pro Tip:</b> Save different scenarios (Base, Bull, Bear) using the sidebar to compare different assumptions!</p>
+    <p>🎯 <b>Pro Tip:</b> Adjust any input to see real-time updates in valuations!</p>
     <p>📊 Dashboard calculates everything automatically - just change any input and watch results update in real-time!</p>
     <p style="font-size: 12px;">Built with Streamlit • DCF Valuation Dashboard • {datetime.now().strftime('%Y')}</p>
 </div>
@@ -1198,8 +1007,6 @@ st.markdown(f"""
 
 # Save DCF range to shared state
 try:
-    import json
-    import os
     state_file = "data/valuation_state.json"
     os.makedirs("data", exist_ok=True)
     
@@ -1210,8 +1017,8 @@ try:
         state = {}
     
     # Get min and max from sensitivity table or use value_per_share range
-    state["dcf_low"] = enterprise_value * 0.8  # Example: 20% below
-    state["dcf_high"] = enterprise_value * 1.2  # Example: 20% above
+    state["dcf_low"] = enterprise_value * 0.8
+    state["dcf_high"] = enterprise_value * 1.2
     
     with open(state_file, "w") as f:
         json.dump(state, f, indent=2)

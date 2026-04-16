@@ -2,6 +2,8 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 from datetime import datetime, timedelta
+import json
+import os
 
 st.set_page_config(page_title="Enterprise Value Dashboard", layout="wide")
 
@@ -146,6 +148,19 @@ st.markdown("""
     color: #0d47a1;
 }
 
+/* Warning Box */
+.warning-box {
+    background: linear-gradient(135deg, #fff3e0 0%, #ffe0b2 100%);
+    padding: 12px 16px;
+    border-radius: 12px;
+    border-left: 4px solid #ff9800;
+    margin: 10px 0;
+    color: #e65100;
+}
+.warning-box b {
+    color: #e65100;
+}
+
 /* Success Box */
 .success-box {
     background: linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%);
@@ -273,31 +288,51 @@ def calculate_multiples(ev, ltm_rev, fy1_rev, ltm_ebitda, fy1_ebitda):
     }
 
 # ============================================================================
-# DATA LOADING
+# DATA LOADING WITH RATE LIMIT HANDLING
 # ============================================================================
 price_data = None
+error_message = None
 
 if data_source == "Auto-fetch from Yahoo Finance":
     if ticker:
         with st.spinner(f"Fetching 52-week data for {ticker}..."):
-            stock = yf.Ticker(ticker)
-            end_date = datetime.today()
-            start_date = end_date - timedelta(days=400)
-            hist = stock.history(start=start_date, end=end_date)
-            if not hist.empty:
-                hist = hist.reset_index()
-                hist = hist[["Date", "Close", "Volume"]].copy()
-                hist["Date"] = pd.to_datetime(hist["Date"]).dt.date
-                price_data = hist
-                st.sidebar.success(f"✅ Fetched {len(price_data)} days")
-            else:
-                st.sidebar.error("No data found")
+            try:
+                stock = yf.Ticker(ticker)
+                end_date = datetime.today()
+                start_date = end_date - timedelta(days=400)
+                hist = stock.history(start=start_date, end=end_date)
+                if not hist.empty:
+                    hist = hist.reset_index()
+                    hist = hist[["Date", "Close", "Volume"]].copy()
+                    hist["Date"] = pd.to_datetime(hist["Date"]).dt.date
+                    price_data = hist
+                    st.sidebar.success(f"✅ Fetched {len(price_data)} days")
+                else:
+                    error_message = "No data found for this ticker"
+                    st.sidebar.error(error_message)
+            except Exception as e:
+                error_msg = str(e)
+                if "RateLimit" in error_msg or "YFRateLimitError" in error_msg:
+                    error_message = "Yahoo Finance rate limit reached. Please use CSV upload or wait a few minutes."
+                    st.sidebar.markdown(f"""
+                    <div class="warning-box">
+                    ⚠️ **Rate Limit Reached**<br><br>
+                    Too many requests. Please use <b>CSV Upload</b> instead or wait a few minutes.
+                    </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    error_message = f"Error: {error_msg[:100]}"
+                    st.sidebar.error(error_message)
 else:
     uploaded_file = st.sidebar.file_uploader("Upload CSV (Date, Close, Volume)", type="csv")
     if uploaded_file:
-        price_data = pd.read_csv(uploaded_file)
-        price_data["Date"] = pd.to_datetime(price_data["Date"]).dt.date
-        st.sidebar.success(f"✅ Uploaded {len(price_data)} rows")
+        try:
+            price_data = pd.read_csv(uploaded_file)
+            price_data["Date"] = pd.to_datetime(price_data["Date"]).dt.date
+            st.sidebar.success(f"✅ Uploaded {len(price_data)} rows")
+        except Exception as e:
+            error_message = f"Error reading CSV: {e}"
+            st.sidebar.error(error_message)
 
 # ============================================================================
 # MAIN DISPLAY
@@ -323,7 +358,7 @@ if price_data is not None and not price_data.empty:
     multiples = calculate_multiples(current_ev, ltm_revenue, fy1_revenue, ltm_ebitda, fy1_ebitda)
     
     # ========================================================================
-    # VALUE PER SHARE CARD
+    # VALUE CARD
     # ========================================================================
     st.markdown(f"""
     <div class="value-card">
@@ -431,9 +466,31 @@ if price_data is not None and not price_data.empty:
         | EV / LTM EBITDA | ${current_ev:,.0f}M ÷ ${ltm_ebitda:,}M | **{multiples['EV / LTM EBITDA']:.2f}x** |
         | EV / FY1 EBITDA | ${current_ev:,.0f}M ÷ ${fy1_ebitda:,}M | **{multiples['EV / FY1 EBITDA']:.2f}x** |
         """)
+    
+    # ========================================================================
+    # SAVE TO SHARED STATE (INSIDE THE IF BLOCK - AFTER VARIABLES ARE DEFINED)
+    # ========================================================================
+    try:
+        save_data = {}
+        save_data["ev_52wk_low"] = float(low_ev)
+        save_data["ev_52wk_high"] = float(high_ev)
+        save_data["current_ev"] = float(current_ev)
+        
+        os.makedirs("data", exist_ok=True)
+        with open("data/valuation_state.json", "w") as f:
+            json.dump(save_data, f, indent=2)
+    except Exception as e:
+        pass
 
 else:
-    st.warning("Please provide 52-week price data via auto-fetch or CSV upload.")
+    st.markdown("""
+    <div class="warning-box">
+    ⚠️ **No price data available**<br><br>
+    Please use one of these options:<br>
+    1. **Auto-fetch**: Wait a minute and try again (Yahoo Finance has rate limits)<br>
+    2. **CSV Upload**: Upload your own 52-week price data
+    </div>
+    """, unsafe_allow_html=True)
 
 # ============================================================================
 # FOOTER
@@ -441,28 +498,12 @@ else:
 st.markdown("---")
 st.markdown("""
 <div style="text-align: center; padding: 20px;">
-    <p style="color: #1b5e20;">💡 <b>Pro Tip:</b> Use auto-fetch for real-time data or upload your own CSV for historical analysis</p>
+    <p style="color: #1b5e20;">💡 <b>Pro Tip:</b> Use CSV upload if auto-fetch fails due to rate limits</p>
     <p style="font-size: 12px; color: #1b5e20;">Built with Streamlit • Enterprise Value Dashboard</p>
 </div>
 """, unsafe_allow_html=True)
 
-# Save to shared state for football field
-try:
-    import json
-    import os
-    save_data = {}
-    save_data["ev_52wk_low"] = low_ev
-    save_data["ev_52wk_high"] = high_ev
-    save_data["current_ev"] = current_ev
-    
-    os.makedirs("data", exist_ok=True)
-    with open("data/valuation_state.json", "w") as f:
-        json.dump(save_data, f, indent=2)
-except Exception as e:
-    pass
-
-# Add at the very bottom, before the footer
-st.markdown("---")
+# User Guide Link
 st.markdown("<div style='text-align: center;'>📚 <b>Need help interpreting these results?</b></div>", unsafe_allow_html=True)
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
